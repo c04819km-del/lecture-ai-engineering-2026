@@ -9,7 +9,8 @@ from pydantic_ai import DeferredToolRequests
 from pydantic_ai.messages import ToolCallPart, ToolReturnPart
 from pydantic_ai.models.test import TestModel
 
-from app.agent import agent
+from app import tools
+from app.agent import agent, confirm_and_save_learning_log
 
 BASE_TOOLS = {"search_glossary", "get_lecture_summary"}
 
@@ -40,3 +41,26 @@ def test_glossary_result_reaches_the_model():
         result = agent.run_sync("RAGとは？")
     returns = _parts(result, ToolReturnPart)
     assert returns and returns[0].tool_name == "search_glossary"
+
+
+def test_save_learning_log_is_waiting_for_approval():
+    model = TestModel(call_tools=["save_learning_log"])
+    with agent.override(model=model):
+        result = agent.run_sync("質問に回答して保存する")
+
+    assert isinstance(result.output, DeferredToolRequests)
+    assert [call.tool_name for call in result.output.approvals] == ["save_learning_log"]
+
+
+def test_confirm_and_save_learning_log_saves_only_after_confirmation(tmp_path, monkeypatch):
+    monkeypatch.setattr(tools, "LEARNING_LOG_DIR", tmp_path)
+    monkeypatch.setattr("builtins.input", lambda _: "n")
+    assert not confirm_and_save_learning_log("質問1", "回答1")
+    assert not (tmp_path / "log.txt").exists()
+
+    monkeypatch.setattr("builtins.input", lambda _: "y")
+    assert confirm_and_save_learning_log("質問2", "回答2")
+    lines = (tmp_path / "log.txt").read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 2
+    assert lines[0].endswith("【質問】質問2")
+    assert lines[1].endswith("【解答】回答2")
