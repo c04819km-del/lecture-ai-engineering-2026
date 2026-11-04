@@ -16,7 +16,7 @@ import inspect
 import json
 from pathlib import Path
 
-from pydantic_ai import Agent
+from pydantic_ai import Agent, DeferredToolRequests
 from pydantic_ai.exceptions import ModelHTTPError
 from fastmcp import Client
 from pydantic_ai.mcp import MCPToolset, StdioTransport
@@ -38,10 +38,18 @@ INSTRUCTIONS = """\
 """
 
 # モデルは実行時に渡す（テストではAPIを呼ばない TestModel に差し替えるため）
-agent = Agent(instructions=INSTRUCTIONS)
+agent = Agent(
+    instructions=(
+        INSTRUCTIONS
+        + "\n質問に回答するときは、質問文と回答の200文字以内の要約を "
+        "save_learning_log で記録する。利用者が保存を拒否した場合は再度依頼しない。"
+    ),
+    output_type=[str, DeferredToolRequests],
+)
 agent.tool_plain(tools.search_glossary)
 agent.tool_plain(tools.get_lecture_summary)
 agent.tool_plain(tools.make_quiz)
+agent.tool_plain(tools.save_learning_log, requires_approval=True)
 
 # TODO(第3回 演習): tools.py に make_quiz を作り、ここで登録しよう
 
@@ -110,6 +118,25 @@ def print_trace(result) -> None:
     print(f"[usage] {result.usage}")
 
 
+def confirm_and_save_learning_log(question: str, answer_summary: str) -> bool:
+    question_text = " ".join(question.splitlines()).strip()
+    summary = " ".join(answer_summary.splitlines()).strip()[:200]
+    print(
+        "\n保存先: learning_log/log.txt"
+        f"\n保存内容: 【質問】{question_text}\n【解答】{summary}"
+    )
+    try:
+        response = input("この内容を保存しますか？ [y/N]: ").strip().lower()
+    except EOFError:
+        response = ""
+    if response not in {"y", "yes", "はい"}:
+        print("保存をキャンセルしました。")
+        return False
+
+    print(tools.save_learning_log(question, summary))
+    return True
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="学習支援エージェントに質問する")
     parser.add_argument("question", nargs="?")
@@ -128,13 +155,38 @@ def main() -> None:
     print(f"[model] {MODEL}")
     if args.mcp:
         print("[tools] MCP サーバー（app/mcp_servers.json）")
+    save_requested = False
     try:
         result = target.run_sync(args.question, model=build_model())
+        if isinstance(result.output, DeferredToolRequests):
+            deferred_requests = result.output
+            save_requested = any(
+                call.tool_name == "save_learning_log"
+                for call in deferred_requests.approvals
+            )
+            approvals = {}
+            for call in deferred_requests.approvals:
+                print(f"\n保存先: learning_log/log.txt\n保存内容: {call.args}")
+                try:
+                    response = input("この内容を保存しますか？ [y/N]: ").strip().lower()
+                except EOFError:
+                    response = ""
+                approvals[call.tool_call_id] = response in {"y", "yes", "はい"}
+
+            result = target.run_sync(
+                args.question,
+                model=build_model(),
+                message_history=result.all_messages(),
+                deferred_tool_results=deferred_requests.build_results(approvals=approvals),
+                usage=result.usage,
+            )
     except ModelHTTPError as e:
         print(api_error_message(e.status_code, str(e.body)[:200]))
         raise SystemExit(1)
     print(result.output)
     print(f"[requests] {result.usage.requests}")
+    if not save_requested:
+        confirm_and_save_learning_log(args.question, str(result.output))
     if args.trace:
         print_trace(result)
 

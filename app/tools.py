@@ -6,10 +6,12 @@
 
 import json
 import random
+from datetime import datetime
 from functools import cache
 from pathlib import Path
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+LEARNING_LOG_DIR = Path(__file__).resolve().parent.parent / "learning_log"
 MAX_RESULTS = 3
 
 
@@ -95,3 +97,22 @@ def make_quiz(lecture: int) -> str:
         },
         ensure_ascii=False,
     )
+
+
+def save_learning_log(question: str, answer_summary: str) -> str:
+    """質問と回答の要約を learning_log/log.txt に追記する。
+
+    保存は取り消しにくいため、実行前に利用者の承認を得ること。
+    answer_summary は200文字以内にする。
+    """
+    timestamp = datetime.now().astimezone()
+    question_text = " ".join(question.splitlines()).strip()
+    summary = " ".join(answer_summary.splitlines()).strip()[:200]
+    log_path = LEARNING_LOG_DIR / "log.txt"
+    LEARNING_LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+    with log_path.open("a", encoding="utf-8") as log_file:
+        log_file.write(f"{timestamp:%Y-%m-%d %H:%M:%S} 【質問】{question_text}\n")
+        log_file.write(f"{timestamp:%Y-%m-%d} 【解答】{summary}\n")
+
+    return "learning_log/log.txt に追記しました。"

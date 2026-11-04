@@ -39,6 +39,21 @@ def test_lecture_summary():
     assert "まだありません" in tools.get_lecture_summary(99)
 
 
+def test_save_learning_log_appends_two_lines_and_limits_summary(tmp_path, monkeypatch):
+    log_dir = tmp_path / "learning_log"
+    monkeypatch.setattr(tools, "LEARNING_LOG_DIR", log_dir)
+
+    tools.save_learning_log("質問\nの続き", "答" * 201)
+    tools.save_learning_log("次の質問", "次の回答")
+
+    lines = (log_dir / "log.txt").read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 4
+    assert lines[0].endswith("【質問】質問 の続き")
+    assert lines[1].endswith(f"【解答】{'答' * 200}")
+    assert lines[2].endswith("【質問】次の質問")
+    assert lines[3].endswith("【解答】次の回答")
+
+
 def test_default_question_of_lecture1_is_answerable_from_glossary():
     """第1回の既定の質問（app.ask）は、第3回のエージェントが用語集で正しく答えられること。"""
     from app.ask import DEFAULT_QUESTION
